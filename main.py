@@ -16,32 +16,35 @@ def cal_discounted_reward(rewards, gamma=0.96):
         discounted_reward.append(cumulative_sum)
     return discounted_reward[::-1]
 
-agent = MetaLearner(48)
+agent = MetaLearner(
+    number_actions=2,
+    units=48
+)
 observation, action_taken, reward = [], [], []
 
 optimizer = tf.train.RMSPropOptimizer(learning_rate=1e-4)
 
-total_episodes = 500
+total_episodes = 5000
 game_length = 100
 calculate_avg_reward = 10
+bandit_arm_configuration = [0.3, 0.7]
 
-total_reward_list = []
-sum_reward = 0
+total_reward_list, total_regret_list = [], []
+sum_reward, total_regret = 0, 0
 
 global_step = tf.train.get_or_create_global_step()
 experiment_name = "Learning2RLLSTM"
-summary_writer = tf.contrib.summary.create_file_writer("tmp/learning2RL/" + experiment_name)
+summary_writer = tf.contrib.summary.create_file_writer("tmp/learning2RL/" + experiment_name + "/learn")
 
 for episode in range(total_episodes):
-    if random.random() > 0.5:
-        bandit = BanditEnvironment(arm_config=[0.3, 0.7])
-    else:
-        bandit = BanditEnvironment(arm_config=[0.7, 0.3])
+    # New bandit every 50 eps
+    if episode%100 == 0:
+        bandit = BanditEnvironment(arm_config=bandit_arm_configuration, is_random=True)
+
     current_observation = [[0.0, 0.0, 0.0, 0.0]]
     state = agent.reset_state(1)
 
     for i in range(game_length):
-        # numpy_policy, _ = agent.policy(1)
         current_observation = tf.convert_to_tensor(current_observation)
 
         numpy_policy, _, _, state = agent(current_observation, state)
@@ -51,6 +54,9 @@ for episode in range(total_episodes):
 
         action_onehot = [0.0, 0.0]
         action_onehot[choice] = 1.0
+
+        if choice == bandit.index_bad_arm:
+            total_regret += 1
 
         r = bandit.action(choice)
         reward.append(r)
@@ -68,12 +74,17 @@ for episode in range(total_episodes):
     with summary_writer.as_default(), tf.contrib.summary.always_record_summaries():
         if episode%calculate_avg_reward == 0 and episode > 0:
             avg_reward = sum(total_reward_list)/calculate_avg_reward
+            avg_total_regret = sum(total_regret_list)/calculate_avg_reward
             print(f"Average Reward over {episode+1}/{total_episodes} is {avg_reward}")
-            total_reward_list = []
+            print(f"Average Total Regret {episode+1}/{total_episodes} is {avg_total_regret}")
+            print("----------")
+            total_reward_list , total_regret_list= [], []
             tf.contrib.summary.scalar('avg_reward', avg_reward)
+            tf.contrib.summary.scalar('avg_regret', avg_total_regret)
 
 
     total_reward_list.append(sum_reward)
+    total_regret_list.append(total_regret)
 
     with tf.GradientTape() as tape:
         tape.watch(agent.variables)
@@ -81,8 +92,6 @@ for episode in range(total_episodes):
         total_loss = 0
         state = agent.reset_state(1)
         for i in range(game_length):
-            # _, policy = agent.policy(1)
-
             policy_prob, policy, value, state = agent(
                 tf.convert_to_tensor(observation[i]),
                 state
@@ -99,7 +108,7 @@ for episode in range(total_episodes):
 
             entropy_loss = tf.reduce_sum(policy_prob * tf.math.log(policy_prob))
 
-            total_loss += loss * (discounted_reward[i] - value) - entropy_loss * 0.01 + value_loss*0.5
+            total_loss += loss * (discounted_reward[i] - value) - entropy_loss * 0.02 + value_loss*0.5
 
         total_loss /= game_length
 
@@ -107,26 +116,34 @@ for episode in range(total_episodes):
         optimizer.apply_gradients(list(zip(grad, agent.variables)))
 
     observation, action_taken, reward = [], [], []
-    sum_reward = 0
+    sum_reward, total_regret = 0, 0
 
 ##### TESTING ######
-bandit = BanditEnvironment(arm_config=[0.7, 0.3])
+bandit = BanditEnvironment(arm_config=bandit_arm_configuration)
 current_observation = [[0.0, 0.0, 0.0, 0.0]]
 state = agent.reset_state(1)
+
+summary_writer = tf.contrib.summary.create_file_writer("tmp/learning2RL/" + experiment_name + "/test")
+global_step = tf.train.get_or_create_global_step()
+
+cumulative_regret = 0
 
 with summary_writer.as_default(), tf.contrib.summary.always_record_summaries():
     for i in range(game_length):
         global_step.assign_add(1)
-        # numpy_policy, _ = agent.policy(1)
         current_observation = tf.convert_to_tensor(current_observation)
 
         numpy_policy, _, _, state = agent(current_observation, state)
         numpy_policy = numpy_policy.numpy()
 
-        print(f"At i -- {numpy_policy}")
+        print(f"At {i} -- {numpy_policy}")
         tf.contrib.summary.histogram('policy', numpy_policy)
 
         choice = np.random.choice(2, p=numpy_policy[0])
+        if choice == bandit.index_bad_arm:
+            cumulative_regret += 1
+
+        tf.contrib.summary.scalar('cumulative_regret', cumulative_regret)
 
         action_onehot = [0.0, 0.0]
         action_onehot[choice] = 1.0

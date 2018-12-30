@@ -3,6 +3,7 @@ from models.lookup import LookupTable
 from models.simpleLSTM import MetaLearner
 
 from utils import testing
+import json
 
 import tensorflow as tf
 import numpy as np
@@ -45,12 +46,16 @@ def experiment(config, reporter):
     global_step = tf.train.get_or_create_global_step()
     experiment_name = "Learning2RLLSTM"
     folder_name = experiment_name + "_" + str(config["lr"]) + "_" + str(config["unit"])
-    # summary_writer = tf.contrib.summary.create_file_writer("tmp/learning2RL/" + folder_name + "/learn")
+    summary_writer = tf.contrib.summary.create_file_writer("tmp/learning2RL/" + folder_name + "/learn")
 
     optimizer = tf.train.RMSPropOptimizer(learning_rate=config["lr"])
+    saver = tf.train.Checkpoint(optimizer=optimizer,
+                            model=agent,
+                            optimizer_step=tf.train.get_or_create_global_step())
+
 
     for episode in range(total_episodes):
-        if episode%100 == 0:
+        if episode%1 == 0:
             bandit = BanditEnvironment(arm_config=bandit_arm_configuration, is_random=True)
 
         current_observation = [[0.0, 0.0, 0.0, 0.0]]
@@ -75,37 +80,26 @@ def experiment(config, reporter):
             action_taken.append(action_onehot)
 
             observation.append(current_observation)
-            current_observation = [[i+1.0, r] + action_onehot]
+            current_observation = [[(i+1.0)/game_length, r] + action_onehot]
 
             sum_reward += r
 
-        # global_step.assign_add(1)
+        global_step.assign_add(1)
         count += 1
         discounted_reward = cal_discounted_reward(reward)
         action_taken_numpy, dis_reward_numpy = np.array(action_taken), np.array(discounted_reward)
 
-        # with summary_writer.as_default(), tf.contrib.summary.always_record_summaries():
-        if episode%calculate_avg_reward == 0 and episode > 0:
-            avg_reward = sum(total_reward_list)/calculate_avg_reward
-            avg_total_regret = sum(total_regret_list)/calculate_avg_reward
-            # print(f"Average Reward over {episode+1}/{total_episodes} is {avg_reward}")
-            # print(f"Average Total Regret {episode+1}/{total_episodes} is {avg_total_regret}")
+        with summary_writer.as_default(), tf.contrib.summary.always_record_summaries():
+            if episode%calculate_avg_reward == 0 and episode > 0:
+                avg_reward = sum(total_reward_list)/calculate_avg_reward
+                avg_total_regret = sum(total_regret_list)/calculate_avg_reward
 
-            total_reward_list , total_regret_list= [], []
-            # tf.contrib.summary.scalar('avg_reward', avg_reward)
-            # tf.contrib.summary.scalar('avg_regret', avg_total_regret)
-            both_exp = testing(agent, bandit_arm_configuration, folder_name) + testing(agent, bandit_arm_configuration[::-1], folder_name)
-            reporter(total_regret=-both_exp, timesteps_total=count, average_reward=avg_reward, average_regret=avg_total_regret)
-
-            # if sum(regret_overtime)/len(regret_overtime) < avg_total_regret:
-            #     print("Seem like the bot is doing bad, increase the learning rate")
-            #     optimizer = tf.train.RMSPropOptimizer(learning_rate=3e-4)
-            # else:
-            #     print("Seem like the bot is doing good, decrease the learning rate")
-            #     optimizer = tf.train.RMSPropOptimizer(learning_rate=7e-5)
-
-            # print("----------")
-
+                total_reward_list , total_regret_list= [], []
+                tf.contrib.summary.scalar('avg_reward', avg_reward)
+                tf.contrib.summary.scalar('avg_regret', avg_total_regret)
+                both_exp = testing(agent, bandit_arm_configuration, folder_name) + testing(agent, bandit_arm_configuration[::-1], folder_name)
+                tf.contrib.summary.scalar('total_regret', both_exp)
+                reporter(total_regret=-both_exp, timesteps_total=count, average_reward=avg_reward, average_regret=avg_total_regret)
 
         total_reward_list.append(sum_reward)
         total_regret_list.append(total_regret)
@@ -133,7 +127,7 @@ def experiment(config, reporter):
 
                 entropy_loss = tf.reduce_sum(policy_prob * tf.math.log(policy_prob))
 
-                total_loss += loss * (discounted_reward[i] - value) - entropy_loss * 0.02 + value_loss*0.5
+                total_loss += loss * (discounted_reward[i] - value) - entropy_loss * 0.01 + value_loss*0.5
 
             total_loss /= game_length
 
@@ -143,26 +137,28 @@ def experiment(config, reporter):
         observation, action_taken, reward = [], [], []
         sum_reward, total_regret = 0, 0
 
+    saver.save(f'save/{folder_name}.ckpt')
 
+    testing(agent, bandit_arm_configuration, folder_name, is_cumulative_plot=True, is_record=True, show_prob=True),
 
 import ray
 from ray.tune import register_trainable, grid_search, run_experiments
 from ray import tune
 ray.init()
 
-class TestLogger(tune.logger.Logger):
-    def on_result(self, result):
-        print("TestLogger", result)
+# def any_function(**kwargs):
+#     print(f"At {kwargs['timesteps_total']}")
+#
+# experiment({"lr": 0.0003, "unit": 48}, any_function)
 
-# Stupid way to do it is to
 run_experiments({
     "my_experiment": {
         "run": experiment,
         "stop": {"total_regret": -40},
         "config": {
-            "lr": grid_search([1e-3, 1e-4, 3e-4, 5e-4, 7e-4, 1e-5, 3e-5, 5e-5, 7e-5]),
-            "unit": grid_search([48, 64, 10]),
+            "lr": grid_search([1e-4, 3e-4, 5e-4, 7e-4, 1e-5, 3e-5, 5e-5, 7e-5]),
+            # 64, 10
+            "unit": grid_search([48]),
         },
-        "custom_loggers": [TestLogger]
     }
 })

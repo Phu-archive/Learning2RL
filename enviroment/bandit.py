@@ -2,6 +2,7 @@
 
 from enviroment.baseEnviroment import BaseEnvironment
 import random
+random.seed(48)
 
 class BanditEnvironment(BaseEnvironment):
     def __init__(self, arm_config=[0.1, 0.9], is_random=False):

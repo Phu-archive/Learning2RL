@@ -16,7 +16,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import random
 random.seed(48)
 
-def cal_discounted_reward(rewards, gamma=0.96):
+def cal_discounted_reward(rewards, gamma=0.98):
     discounted_reward = []
     cumulative_sum = 0
     for i, r in enumerate(reversed(rewards)):
@@ -25,7 +25,7 @@ def cal_discounted_reward(rewards, gamma=0.96):
     return discounted_reward[::-1]
 
 def experiment(config, reporter):
-    total_episodes = 1500
+    total_episodes = 40001
     game_length = 100
     calculate_avg_reward = 10
     bandit_arm_configuration = [0.3, 0.7]
@@ -45,14 +45,28 @@ def experiment(config, reporter):
 
     global_step = tf.train.get_or_create_global_step()
     experiment_name = "Learning2RLLSTM"
-    folder_name = experiment_name + "_" + str(config["lr"]) + "_" + str(config["unit"])
+    if config.get('decay', False):
+        folder_name = experiment_name + "_" + str(config["lr"]) + "_" + str(config["unit"]) + "_is_decay"
+    else:
+        folder_name = experiment_name + "_" + str(config["lr"]) + "_" + str(config["unit"])
     summary_writer = tf.contrib.summary.create_file_writer("tmp/learning2RL/" + folder_name + "/learn")
 
-    optimizer = tf.train.RMSPropOptimizer(learning_rate=config["lr"])
+    if config.get('decay', False):
+        print("Decay Learning Rate")
+        learning_rate = tf.train.exponential_decay(config['lr'], global_step,
+                                       config.get('decay_step', 10000),
+                                       config.get('decay_ratio', 0.99),
+                                       staircase=True)
+
+        optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+
+    save_path = 'save' + folder_name + "/"
     saver = tf.train.Checkpoint(optimizer=optimizer,
                             model=agent,
                             optimizer_step=tf.train.get_or_create_global_step())
 
+    if config.get('is_load', False):
+        saver.restore(tf.train.latest_checkpoint(save_path))
 
     for episode in range(total_episodes):
         if episode%1 == 0:
@@ -101,6 +115,13 @@ def experiment(config, reporter):
                 tf.contrib.summary.scalar('total_regret', both_exp)
                 reporter(total_regret=-both_exp, timesteps_total=count, average_reward=avg_reward, average_regret=avg_total_regret)
 
+                # learning_rate = tf.train.exponential_decay(config["lr"], global_step,
+                #                            100000, 0.99, staircase=True)
+                # optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+
+        if episode%1000 == 0 and episode > 0:
+            saver.save(f'save/{folder_name}.ckpt')
+
         total_reward_list.append(sum_reward)
         total_regret_list.append(total_regret)
         regret_overtime.append(total_regret)
@@ -119,46 +140,52 @@ def experiment(config, reporter):
                     logits=policy,
                     labels=tf.convert_to_tensor(action_taken_numpy[i])
                 )
-
-                value_loss = tf.losses.mean_squared_error(
-                    tf.convert_to_tensor([[discounted_reward[i]]]),
-                    value
-                )
-
-                entropy_loss = tf.reduce_sum(policy_prob * tf.math.log(policy_prob))
-
-                total_loss += loss * (discounted_reward[i] - value) - entropy_loss * 0.01 + value_loss*0.5
+                # value_loss = tf.losses.mean_squared_error(
+                #     tf.convert_to_tensor([[discounted_reward[i]]]),
+                #     value
+                # )
+                #
+                # entropy_loss = tf.reduce_sum(policy_prob * tf.math.log(policy_prob))
+                # total_loss += loss * (discounted_reward[i] - value) - entropy_loss * 0.05 + value_loss*0.5
+                total_loss += loss * (discounted_reward[i])
 
             total_loss /= game_length
 
             grad = tape.gradient(total_loss, agent.variables)
+            grad, _ = tf.clip_by_global_norm(grad, 50.0)
+
             optimizer.apply_gradients(list(zip(grad, agent.variables)))
 
         observation, action_taken, reward = [], [], []
         sum_reward, total_regret = 0, 0
 
-    saver.save(f'save/{folder_name}.ckpt')
-
     testing(agent, bandit_arm_configuration, folder_name, is_cumulative_plot=True, is_record=True, show_prob=True),
 
-import ray
-from ray.tune import register_trainable, grid_search, run_experiments
-from ray import tune
-ray.init()
+# import ray
+# from ray.tune import register_trainable, grid_search, run_experiments
+# from ray import tune
+# ray.init()
 
-# def any_function(**kwargs):
-#     print(f"At {kwargs['timesteps_total']}")
-#
-# experiment({"lr": 0.0003, "unit": 48}, any_function)
+def any_function(**kwargs):
+    print(f"At {kwargs['timesteps_total']}")
 
-run_experiments({
-    "my_experiment": {
-        "run": experiment,
-        "stop": {"total_regret": -40},
-        "config": {
-            "lr": grid_search([1e-4, 3e-4, 5e-4, 7e-4, 1e-5, 3e-5, 5e-5, 7e-5]),
-            # 64, 10
-            "unit": grid_search([48]),
-        },
-    }
-})
+experiment({
+    "lr": 4e-8,
+    "unit": 48,
+    "decay": True,
+    "decay_step": 5000,
+    "decay_ratio": 0.99,
+    "is_load": False
+}, any_function)
+
+# run_experiments({
+#     "my_experiment": {
+#         "run": experiment,
+#         "stop": {"total_regret": -40},
+#         "config": {
+#             "lr": grid_search([1e-4, 3e-4, 5e-4, 7e-4, 1e-5, 3e-5, 5e-5, 7e-5]),
+#             # 64, 10
+#             "unit": grid_search([48]),
+#         },
+#     }
+# })

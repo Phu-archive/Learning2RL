@@ -97,7 +97,7 @@ def train_fuction(config, reporter):
 
                     entropy_loss = tf.reduce_sum(pred_prob * tf.math.log(pred_prob))
 
-                    total_loss += loss * (discounted_rewards[i] - value) + tf.cast(value_loss, tf.float64) * 0.5 - entropy_loss * 0.01 
+                    total_loss += -loss * (discounted_rewards[i] - value) + tf.cast(value_loss, tf.float64) * 0.5 - entropy_loss * 0.01 
 
                 total_loss /= len(observation)
 

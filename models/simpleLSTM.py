@@ -7,14 +7,17 @@ class MetaLearner(tf.keras.Model):
 
         self.input_layer = tf.keras.layers.Dense(units)
         self.lstm_core = tf.keras.layers.LSTMCell(units)
+
+        self.middle_layer = tf.keras.layers.Dense(32)
         self.policy_layer = tf.keras.layers.Dense(number_actions)
         self.value_layer = tf.keras.layers.Dense(1)
 
         self.units = units
 
     def call(self, obs, hidden):
-        # inp = tf.nn.relu(self.input_layer(obs))
+        obs = tf.nn.elu(self.input_layer(obs))
         out, state = self.lstm_core(obs, hidden)
+        out = tf.nn.elu(self.middle_layer(obs))
 
         pre_policy = self.policy_layer(out)
         value = self.value_layer(out)

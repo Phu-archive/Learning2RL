@@ -7,8 +7,8 @@ import json
 
 import tensorflow as tf
 import numpy as np
-np.random.seed(48)
-tf.random.set_random_seed(48)
+# np.random.seed(48)
+# tf.random.set_random_seed(48)
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -16,7 +16,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import random
 random.seed(48)
 
-def cal_discounted_reward(rewards, gamma=0.98):
+def cal_discounted_reward(rewards, gamma=0.8):
     discounted_reward = []
     cumulative_sum = 0
     for i, r in enumerate(reversed(rewards)):
@@ -46,9 +46,9 @@ def experiment(config, reporter):
     global_step = tf.train.get_or_create_global_step()
     experiment_name = "Learning2RLLSTM"
     if config.get('decay', False):
-        folder_name = experiment_name + "_" + str(config["lr"]) + "_" + str(config["unit"]) + "_is_decay"
+        folder_name = experiment_name + "_" + str(config["lr"]) + "_" + str(config["unit"]) + "_is_decay" + "_A2C_NoSeed_NewArch_gamma_0.98_elu"
     else:
-        folder_name = experiment_name + "_" + str(config["lr"]) + "_" + str(config["unit"])
+        folder_name = experiment_name + "_" + str(config["lr"]) + "_" + str(config["unit"]) + "_A2C_NoSeed_NewArch_gamma_0.98_elu"
     summary_writer = tf.contrib.summary.create_file_writer("tmp/learning2RL/" + folder_name + "/learn")
 
     if config.get('decay', False):
@@ -59,17 +59,22 @@ def experiment(config, reporter):
                                        staircase=True)
 
         optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+    else:
+        optimizer = tf.train.AdamOptimizer(learning_rate=config['lr'])
 
-    save_path = 'save' + folder_name + "/"
+
+    save_path = 'save' + "/A2C/"
     saver = tf.train.Checkpoint(optimizer=optimizer,
                             model=agent,
                             optimizer_step=tf.train.get_or_create_global_step())
 
     if config.get('is_load', False):
+        print("load the lates checkpoint")
         saver.restore(tf.train.latest_checkpoint(save_path))
+        print(tf.train.get_or_create_global_step())
 
     for episode in range(total_episodes):
-        if episode%1 == 0:
+        if episode%10 == 0:
             bandit = BanditEnvironment(arm_config=bandit_arm_configuration, is_random=True)
 
         current_observation = [[0.0, 0.0, 0.0, 0.0]]
@@ -111,7 +116,9 @@ def experiment(config, reporter):
                 total_reward_list , total_regret_list= [], []
                 tf.contrib.summary.scalar('avg_reward', avg_reward)
                 tf.contrib.summary.scalar('avg_regret', avg_total_regret)
+
                 both_exp = testing(agent, bandit_arm_configuration, folder_name) + testing(agent, bandit_arm_configuration[::-1], folder_name)
+
                 tf.contrib.summary.scalar('total_regret', both_exp)
                 reporter(total_regret=-both_exp, timesteps_total=count, average_reward=avg_reward, average_regret=avg_total_regret)
 
@@ -136,18 +143,26 @@ def experiment(config, reporter):
                     tf.convert_to_tensor(observation[i]),
                     state
                 )
+
                 loss = tf.nn.softmax_cross_entropy_with_logits_v2(
                     logits=policy,
                     labels=tf.convert_to_tensor(action_taken_numpy[i])
                 )
-                # value_loss = tf.losses.mean_squared_error(
-                #     tf.convert_to_tensor([[discounted_reward[i]]]),
-                #     value
-                # )
-                #
-                # entropy_loss = tf.reduce_sum(policy_prob * tf.math.log(policy_prob))
-                # total_loss += loss * (discounted_reward[i] - value) - entropy_loss * 0.05 + value_loss*0.5
-                total_loss += loss * (discounted_reward[i])
+
+                value_loss = tf.losses.mean_squared_error(
+                    tf.convert_to_tensor([[discounted_reward[i]]]),
+                    value
+                )
+
+                entropy_loss = tf.reduce_sum(policy_prob * tf.math.log(policy_prob))
+
+                if episode%500 == 0 and episode > 0:
+                    entropy_coeff *= 0.99
+                elif episode == 0:
+                    entropy_coeff = 0.1
+
+                total_loss += loss * (discounted_reward[i] - value) - entropy_loss * entropy_coeff + value_loss * 0.5
+                # total_loss += loss * (discounted_reward[i])
 
             total_loss /= game_length
 
@@ -161,22 +176,22 @@ def experiment(config, reporter):
 
     testing(agent, bandit_arm_configuration, folder_name, is_cumulative_plot=True, is_record=True, show_prob=True),
 
-# import ray
-# from ray.tune import register_trainable, grid_search, run_experiments
-# from ray import tune
-# ray.init()
-
 def any_function(**kwargs):
     print(f"At {kwargs['timesteps_total']}")
 
 experiment({
-    "lr": 4e-8,
+    "lr": 3e-3,
     "unit": 48,
     "decay": True,
-    "decay_step": 5000,
+    "decay_step": 2500,
     "decay_ratio": 0.99,
     "is_load": False
 }, any_function)
+
+# import ray
+# from ray.tune import register_trainable, grid_search, run_experiments
+# from ray import tune
+# ray.init()
 
 # run_experiments({
 #     "my_experiment": {

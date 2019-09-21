@@ -40,7 +40,7 @@ print(testing(
 
 print(testing(
     agent,
-    [0.7, 0.3],
+    [0.9, 0.1],
     None,
     show_prob=True
 ))
